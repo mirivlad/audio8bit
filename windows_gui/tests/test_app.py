@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from windows_gui.app import convert_args, target_path, engine_python, child_python_env, GUI
+from windows_gui.app import (convert_args, target_path, engine_python,
+                             child_python_env, bundled_engine_wheel,
+                             installed_engine_version, ENGINE, GUI)
 
 
 class GuiTests(unittest.TestCase):
@@ -46,6 +48,12 @@ class GuiTests(unittest.TestCase):
             capture_output=True, text=True, encoding="utf-8", check=True,
         )
         self.assertIn("博麗神社うた祭_8bit.mp3", actual.stdout)
+
+    def test_bundle_engine_version(self):
+        self.assertEqual(ENGINE, "0.0.4")
+        # Testing source tree need not have a built wheel yet.
+        path = bundled_engine_wheel()
+        self.assertTrue(path is None or path.name == "audio8bit-0.0.4-py3-none-any.whl")
 
     def test_validation(self):
         opts = dict(bits="0", rate="22050", transpose="0", duty="0.25",

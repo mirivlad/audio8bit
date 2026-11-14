@@ -13,7 +13,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP = "Audio8BitGUI"
-ENGINE = "0.0.3"
+ENGINE = "0.0.4"
 VOICES = {"Аккорды": "chords", "Только мелодия": "lead",
           "Чип-группа": "band", "NES / 8-bit": "nes"}
 SOURCES = {"Автоматически": "auto", "Вокал": "vocals", "Инструменты": "instrumental"}
@@ -27,6 +27,35 @@ def home() -> Path:
 
 def engine_python() -> Path:
     return home() / "engine" / "Scripts" / "python.exe"
+
+
+def bundled_engine_wheel() -> Path | None:
+    """Find the fork's exact wheel embedded in the frozen GUI executable."""
+    filename = f"audio8bit-{ENGINE}-py3-none-any.whl"
+    candidates = [
+        Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "engine" / filename,
+        Path(sys.executable).resolve().parent / filename,
+        Path(__file__).resolve().parent.parent / "dist" / filename,
+    ]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def installed_engine_version() -> str | None:
+    """Read version from the existing venv without importing heavy models."""
+    if not engine_python().is_file():
+        return None
+    try:
+        done = subprocess.run(
+            [str(engine_python()), "-c",
+             "from importlib.metadata import version; print(version('audio8bit'))"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+            errors="replace", timeout=12,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return done.stdout.strip() if done.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 
 def external_python() -> str | None:
@@ -193,7 +222,7 @@ class GUI(tk.Tk):
         self.status = tk.StringVar()
         ttk.Label(tools, textvariable=self.status).pack(side="left", fill="x", expand=True)
         ttk.Button(tools, text="Указать FFmpeg", command=self._choose_ffmpeg).pack(side="right")
-        self.install_btn = ttk.Button(tools, text="Установить движок", command=self._install)
+        self.install_btn = ttk.Button(tools, text="Установить/обновить движок", command=self._install)
         self.install_btn.pack(side="right", padx=7)
         diagnostics = ttk.Frame(frame)
         diagnostics.pack(fill="x", pady=(0, 10))
@@ -282,7 +311,13 @@ class GUI(tk.Tk):
         return result
 
     def _refresh_status(self):
-        engine = "Движок установлен" if engine_python().is_file() else "Движок не установлен"
+        version = installed_engine_version()
+        if version == ENGINE:
+            engine = f"Движок {version} установлен"
+        elif version:
+            engine = f"Нужно обновить движок ({version} → {ENGINE})"
+        else:
+            engine = "Движок не установлен"
         ff = "FFmpeg найден" if ffmpeg_path(self.saved.get("ffmpeg", "")) else "FFmpeg не найден"
         self.status.set(engine + "  ·  " + ff)
 
@@ -330,7 +365,8 @@ class GUI(tk.Tk):
         threading.Thread(target=task, daemon=True).start()
 
     def _install(self):
-        if engine_python().is_file() and not messagebox.askyesno("Обновить?", "Установить движок повторно?"):
+        if installed_engine_version() == ENGINE and not messagebox.askyesno(
+                "Переустановить?", "Нужная версия движка уже установлена. Установить её повторно?"):
             return
         self._write("Установка может загрузить несколько гигабайт зависимостей и модели ИИ.")
         self._start(self._install_worker)
@@ -401,8 +437,15 @@ class GUI(tk.Tk):
             if code != 0 or self.stopping:
                 self.events.put(("log", f"Не удалось создать окружение (код {code})."))
                 return
+        wheel = bundled_engine_wheel()
+        if wheel is None:
+            self.events.put(("log", "В комплекте GUI отсутствует wheel движка "
+                                     f"audio8bit {ENGINE}. Скачайте официальный ZIP "
+                                     "этого форка и запустите EXE из него."))
+            return
+        self.events.put(("log", f"Установка движка audio8bit {ENGINE} из комплекта GUI…"))
         code = self._launch([str(exe), "-m", "pip", "install", "--no-input",
-                             "--disable-pip-version-check", "audio8bit==" + ENGINE])
+                             "--disable-pip-version-check", str(wheel)])
         if code != 0 or self.stopping:
             self.events.put(("log", f"Установка не завершена (код {code})."))
             return
@@ -425,8 +468,14 @@ class GUI(tk.Tk):
         except (KeyError, TypeError, ValueError) as exc:
             messagebox.showerror("Параметры", str(exc))
             return
-        if not engine_python().is_file():
-            messagebox.showwarning("Движок", "Сначала установите движок (нужен Python 3.11 x64).")
+        version = installed_engine_version()
+        if version != ENGINE:
+            messagebox.showwarning(
+                "Версия движка",
+                f"Для новых алгоритмов требуется audio8bit {ENGINE}. "
+                f"Установлено: {version or 'не найдено'}. Нажмите "
+                "«Установить/обновить движок»; скачанные модели сохранятся.",
+            )
             return
         ff_dir = ffmpeg_path(opts["ffmpeg"])
         if not ff_dir:
