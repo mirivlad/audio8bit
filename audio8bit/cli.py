@@ -62,7 +62,7 @@ def build_parser():
              "harmony, a triangle bass from the bass stem and noise drums from "
              "the drums stem), or 'nes' plays the same band but with the harmony "
              "as a fast arpeggio and the notes and drums snapped to the beat "
-             f"(default: {DEFAULT_VOICES})",
+             f"(default: {DEFAULT_VOICES}); 'ay' emulates ZX Spectrum AY, ""and 'ym' Yamaha YM2149F",
     )
     parser.add_argument(
         "--transpose", type=int, default=DEFAULT_TRANSPOSE,

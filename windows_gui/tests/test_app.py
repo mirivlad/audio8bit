@@ -50,10 +50,23 @@ class GuiTests(unittest.TestCase):
         self.assertIn("博麗神社うた祭_8bit.mp3", actual.stdout)
 
     def test_bundle_engine_version(self):
-        self.assertEqual(ENGINE, "0.0.4")
+        self.assertEqual(ENGINE, "0.0.5")
         # Testing source tree need not have a built wheel yet.
         path = bundled_engine_wheel()
-        self.assertTrue(path is None or path.name == "audio8bit-0.0.4-py3-none-any.whl")
+        self.assertTrue(path is None or path.name == "audio8bit-0.0.5-py3-none-any.whl")
+
+    def test_new_psg_options(self):
+        opts = dict(bits="8", rate="22050", transpose="0", duty="0.25",
+                    voices="ay", method="transcribe", format="wav",
+                    source="auto")
+        cmd = convert_args("song.mp3", Path("out.wav"), opts)
+        self.assertEqual(cmd[cmd.index("-V") + 1], "ay")
+        opts["voices"] = "ym"
+        self.assertEqual(convert_args("song.mp3", Path("out.wav"), opts)[
+            cmd.index("-V") + 1], "ym")
+        opts["method"] = "pitch"
+        with self.assertRaises(ValueError):
+            convert_args("song.mp3", Path("out.wav"), opts)
 
     def test_validation(self):
         opts = dict(bits="0", rate="22050", transpose="0", duty="0.25",

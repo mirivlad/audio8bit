@@ -13,9 +13,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP = "Audio8BitGUI"
-ENGINE = "0.0.4"
+ENGINE = "0.0.5"
 VOICES = {"Аккорды": "chords", "Только мелодия": "lead",
-          "Чип-группа": "band", "NES / 8-bit": "nes"}
+          "Чип-группа": "band", "NES / 8-bit": "nes",
+          "ZX Spectrum (AY-3-8910)": "ay",
+          "Yamaha (YM2149F / Atari ST)": "ym"}
 SOURCES = {"Автоматически": "auto", "Вокал": "vocals", "Инструменты": "instrumental"}
 METHODS = {"Транскрипция": "transcribe", "Определение высоты": "pitch"}
 FORMATS = ("wav", "mp3", "ogg", "flac")
@@ -121,13 +123,13 @@ def convert_args(source: str, target: Path, opts: dict) -> list[str]:
     if not -24 <= transpose <= 24 or not 0 < duty < 1:
         raise ValueError("Транспонирование −24…24; ширина импульса между 0 и 1")
     voice, method = opts["voices"], opts["method"]
-    if voice in ("nes", "band") and method == "pitch":
-        raise ValueError("NES и чип-группа требуют метод «Транскрипция»")
+    if voice in ("nes", "band", "ay", "ym") and method == "pitch":
+        raise ValueError("NES, чип-группа, AY и YM требуют метод «Транскрипция»")
     command = [str(engine_python()), "-m", "audio8bit.cli", "-i", source, "-o", str(target),
                "-f", opts["format"], "-V", voice, "-s", opts["source"], "-m", method,
                "--bits", str(bits), "--rate", str(rate),
                "--transpose", str(transpose), "--duty", str(duty)]
-    if voice in ("nes", "band"):
+    if voice in ("nes", "band", "ay", "ym"):
         for key in ("key-snap", "arrange", "echo", "dither"):
             command += ["--" + key, "on" if opts.get(key, True) else "off"]
     if not opts.get("cache", True):

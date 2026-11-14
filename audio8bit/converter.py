@@ -79,7 +79,10 @@ VOICES_CHORDS = "chords"
 VOICES_LEAD = "lead"
 VOICES_BAND = "band"
 VOICES_NES = "nes"
-VOICES_CHOICES = (VOICES_CHORDS, VOICES_LEAD, VOICES_BAND, VOICES_NES)
+VOICES_AY = "ay"
+VOICES_YM = "ym"
+VOICES_CHOICES = (VOICES_CHORDS, VOICES_LEAD, VOICES_BAND,
+                  VOICES_NES, VOICES_AY, VOICES_YM)
 DEFAULT_VOICES = VOICES_CHORDS
 CHORD_MIN_SECONDS = 0.04
 # Each chord voice is scaled by its transcribed loudness for real dynamics; the
@@ -2070,7 +2073,11 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
     signal, fmin, fmax, picked = select_melody(stems, source)
     info = [f"melody source: {picked}", f"method: {method}"]
 
-    if method == METHOD_TRANSCRIBE and voices in (VOICES_BAND, VOICES_NES):
+    if method == METHOD_PITCH and voices in (VOICES_AY, VOICES_YM):
+        raise ConversionError("AY/YM modes require --method transcribe.")
+
+    if method == METHOD_TRANSCRIBE and voices in (
+            VOICES_BAND, VOICES_NES, VOICES_AY, VOICES_YM):
         if source == SOURCE_AUTO:
             events, harmony_events, selected = transcribe_auto_stems(
                 stems, sample_rate)
@@ -2090,7 +2097,8 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
         )
         lead_notes = melody_line(events)
         drum_hits = detect_drums(stems.get("drums"), sample_rate)
-        nes = voices == VOICES_NES
+        psg_chip = voices if voices in (VOICES_AY, VOICES_YM) else None
+        nes = voices == VOICES_NES or psg_chip is not None
 
         # Arrange rather than replay: reduce the events to a chord progression
         # for the accompaniment, put the bass on chord roots, and (nes) loop
@@ -2131,11 +2139,22 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
             bass_notes = snap_notes_to_key(bass_notes, key_scale)
         pulse_step = 60.0 / tempo / 4 if "tempo" in locals() and tempo > 0 else 0.125
         duration = max(len(stem) for stem in stems.values()) / sample_rate
-        voice = render_band(events, rate, duty, transpose,
-                            lead_notes=lead_notes, bass_notes=bass_notes,
-                            drum_hits=drum_hits, arp=nes, vibrato=nes,
-                            chords=chords, echo_delay=echo_delay,
-                            pulse_step=pulse_step, duration=duration)
+        if psg_chip:
+            from audio8bit.psg import render_psg
+            voice = render_psg(
+                events=events, rate=rate, chip=psg_chip,
+                lead_notes=lead_notes, bass_notes=bass_notes,
+                chords=chords, drum_hits=drum_hits,
+                transpose=transpose, tempo=(tempo if "tempo" in locals()
+                                             else FALLBACK_TEMPO),
+                duration=duration,
+            )
+        else:
+            voice = render_band(events, rate, duty, transpose,
+                                lead_notes=lead_notes, bass_notes=bass_notes,
+                                drum_hits=drum_hits, arp=nes, vibrato=nes,
+                                chords=chords, echo_delay=echo_delay,
+                                pulse_step=pulse_step, duration=duration)
         voice = normalize_loudness(voice)
         if dither:
             voice = tpdf_dither(voice, bits)
@@ -2143,6 +2162,9 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
         write_output(destination, samples_u8, rate, 1)
         quality_ok, report = validate_audio(samples_u8, rate, len(events))
         info.append(f"voices: {voices}")
+        if psg_chip:
+            info.append(f"chip: {'AY-3-8912 / ZX Spectrum 128' if psg_chip == 'ay' else 'Yamaha YM2149F / Atari ST'}")
+            info.append("channels: 3 tone, shared noise (approximate PSG sound)")
         transcribed_end = max(event[1] for event in events)
         info.append(f"source length: {duration:.1f}s, transcription: {transcribed_end:.1f}s")
         if duration - transcribed_end > 8:
