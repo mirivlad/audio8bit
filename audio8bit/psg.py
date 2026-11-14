@@ -105,7 +105,10 @@ def render_psg(*, events, rate: int, chip: str, lead_notes=None,
     if events:
         span = max(span, max(end for start, end, pitch, amplitude in events))
     for notes in (lead_notes or [], bass_notes or []):
-        span = max(span, float(notes[0]) + float(notes[1]))
+        # Notes are [start, duration, pitch] triples; consider every note,
+        # not the first nested list as if it were a single note.
+        for note in notes:
+            span = max(span, float(note[0]) + float(note[1]))
     for start, end, root, pcs in (chords or []):
         span = max(span, float(end))
     for onset, kind, velocity in (drum_hits or []):
