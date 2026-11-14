@@ -1,0 +1,66 @@
+name: Windows GUI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'windows_gui/**'
+      - '.github/workflows/windows-gui.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows executable
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Test GUI logic
+        run: python -m unittest discover -s windows_gui/tests -v
+      - name: Install PyInstaller
+        run: python -m pip install "pyinstaller>=6.12,<7"
+      - name: Build GUI (engine installed separately)
+        run: python -m PyInstaller --onefile --windowed --clean --name Audio8BitGUI windows_gui/app.py
+      - name: Bundle executable and instructions
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bundle | Out-Null
+          Copy-Item dist/Audio8BitGUI.exe bundle/
+          Copy-Item windows_gui/README_RU.md,windows_gui/LICENSE,windows_gui/setup-prereqs.ps1 bundle/
+          Compress-Archive -Path bundle/* -DestinationPath Audio8BitGUI-windows-x64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Audio8BitGUI-windows-x64
+          path: Audio8BitGUI-windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GUI release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Audio8BitGUI-windows-x64
+      - name: Create or update GUI-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view gui-v0.1.0 >/dev/null 2>&1; then
+            gh release upload gui-v0.1.0 Audio8BitGUI-windows-x64.zip --clobber
+          else
+            gh release create gui-v0.1.0 Audio8BitGUI-windows-x64.zip \
+              --target "$GITHUB_SHA" \
+              --title "Audio8Bit GUI v0.1.0 (Windows)" \
+              --notes "Windows x64 GUI for audio8bit. The EXE contains the GUI only; install Python 3.11 x64, FFmpeg, and the audio8bit engine separately using the included instructions. Engine license: PolyForm Noncommercial 1.0.0."
+          fi
