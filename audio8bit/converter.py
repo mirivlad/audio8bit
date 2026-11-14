@@ -161,7 +161,7 @@ HAT_GAIN = 0.28
 # it steps through the chord's notes every ARP_STEP_SECONDS on one pulse voice.
 # Notes and drums are snapped to the song's beat grid; the lead gets vibrato on
 # sustained notes.
-ARP_STEP_SECONDS = 1.0 / 48.0
+ARP_STEP_SECONDS = 0.125  # fallback only; arranger derives its step from tempo
 ARP_GAIN = 0.30
 LEAD_VIBRATO_MIN_SECONDS = 0.3
 # Keep the lead on top of the accompaniment: the harmony bed is trimmed and,
@@ -816,26 +816,43 @@ def voice_pitch(pc, low=CHORD_REGISTER_LOW, high=CHORD_REGISTER_HIGH):
     return min(candidates, key=lambda midi: abs(midi - centre))
 
 
-def render_chord_pad(chords, sample_rate, transpose, total):
-    """Accompaniment for 'band': each chord as three sustained pulse voices."""
+def render_chord_pad(chords, sample_rate, transpose, total, pulse_step=0.25):
+    """Rhythmic NES chord stabs, not a continuous three-oscillator drone.
+
+    Each beat subdivision contains a short voiced chord fragment with space
+    for lead/drums. The pitches and chord changes still come from the song.
+    """
     buffer = np.zeros(total, dtype=np.float64)
+    pulse_step = max(0.06, float(pulse_step))
+    cache = {}
     for start, end, root_pc, pcs in chords:
-        count = int((end - start) * sample_rate)
-        if count <= 0:
-            continue
-        envelope = chip_envelope(count, sample_rate, attack=0.006, decay=0.25,
-                                 sustain=0.7, release=0.04)
-        time = np.arange(count) / sample_rate
-        offset = int(start * sample_rate)
-        stop = min(offset + count, total)
-        if offset >= total:
-            continue
-        for pc in pcs:
-            frequency = float(midi_to_hz(voice_pitch(pc) + transpose))
-            tone = band_limited_pulse(2.0 * np.pi * frequency * time, frequency,
-                                      sample_rate, HARMONY_DUTY)
-            tone *= envelope * CHORD_PAD_VOICE_GAIN
-            buffer[offset:stop] += tone[:stop - offset]
+        moment, index = start, 0
+        while moment < end - 1e-6:
+            count = int(min(pulse_step * 0.7, end - moment) * sample_rate)
+            offset = int(moment * sample_rate)
+            if count > 1 and 0 <= offset < total:
+                if index % 4 == 0:
+                    notes, gain = pcs, 0.75
+                elif index % 2 == 0:
+                    notes, gain = (pcs[0], pcs[2]), 0.5
+                else:
+                    notes, gain = (pcs[1],), 0.4
+                for pc in notes:
+                    midi = voice_pitch(pc) + transpose
+                    key = (midi, count)
+                    if key not in cache:
+                        hz = float(midi_to_hz(midi))
+                        t = np.arange(count) / sample_rate
+                        tone = band_limited_pulse(
+                            2 * np.pi * hz * t, hz, sample_rate, HARMONY_DUTY)
+                        cache[key] = tone * chip_envelope(
+                            count, sample_rate, attack=0.003, decay=0.06,
+                            sustain=0.5, release=0.015)
+                    end_sample = min(offset + count, total)
+                    buffer[offset:end_sample] += cache[key][:end_sample-offset] * (
+                        CHORD_PAD_VOICE_GAIN * gain)
+            moment += pulse_step
+            index += 1
     return buffer
 
 
@@ -1145,7 +1162,8 @@ def render_pad(events, sample_rate, transpose, total):
 
 def render_band(events, sample_rate, duty=DEFAULT_DUTY, transpose=0,
                 lead_notes=None, bass_notes=None, drum_hits=None,
-                arp=False, vibrato=False, chords=None, echo_delay=0):
+                arp=False, vibrato=False, chords=None, echo_delay=0,
+                pulse_step=0.125, duration=None):
     """Render the polyphony as a small chip band, so it sounds like several
     instruments: a bright pulse lead, a hollow-square pulse harmony, a triangle
     bass and a noise drum channel (kick/snare/hat), mixed and levelled once by
@@ -1160,17 +1178,19 @@ def render_band(events, sample_rate, duty=DEFAULT_DUTY, transpose=0,
     if not events:
         return np.zeros(sample_rate, dtype=np.float32)
     span = max(end for start, end, pitch, amplitude in events)
+    if duration is not None:
+        span = max(span, float(duration))
     total = int(span * sample_rate) + sample_rate
 
     # Harmony: clean voiced triads from the detected chords when available,
     # else the raw transcription; arpeggiated (nes) or stacked (band).
     if chords:
         if arp:
-            buffer = render_chord_arp(chords, sample_rate, transpose, total)
+            buffer = render_chord_arp(chords, sample_rate, transpose, total, step=pulse_step)
         else:
-            buffer = render_chord_pad(chords, sample_rate, transpose, total)
+            buffer = render_chord_pad(chords, sample_rate, transpose, total, pulse_step=pulse_step * 2)
     elif arp:
-        buffer = render_arp(events, sample_rate, transpose, total)
+        buffer = render_arp(events, sample_rate, transpose, total, step=pulse_step)
     else:
         buffer = render_pad(events, sample_rate, transpose, total)
 
@@ -1935,6 +1955,50 @@ def extract_by_pitch(signal, sample_rate, fmin, fmax, picked, transpose, origin)
     return notes, tempo
 
 
+def transcribe_auto_stems(stems, sample_rate, segment_seconds=3.0):
+    """Use vocals in sung sections and backing for instrumental passages.
+
+    Both stems are transcribed separately. Backing is always retained for
+    harmony estimation: building chords from the vocal melody often makes
+    static, wrong chord roots and destroys the original arrangement.
+    """
+    vocals = stems.get("vocals")
+    backing = stems.get("other")
+    if backing is None or not backing.size:
+        raise ConversionError("Demucs returned no instrumental stem.")
+    backing_events = clean_events(transcribe_notes(backing, sample_rate))
+    vocal_events = (clean_events(transcribe_notes(vocals, sample_rate))
+                    if vocals is not None and vocals.size else [])
+    if not backing_events and not vocal_events:
+        raise ConversionError("Neither vocal nor instrumental stem contains transcribed notes.")
+    if not vocal_events:
+        return backing_events, backing_events, "instrumental (auto)"
+    if not backing_events:
+        return vocal_events, vocal_events, "vocals (auto)"
+    span = max(backing.size, vocals.size) / sample_rate
+    segments = max(1, int(np.ceil(span / segment_seconds)))
+    merged, vocal_sections = [], 0
+    for i in range(segments):
+        left = i * segment_seconds
+        right = min(span, left + segment_seconds)
+        lo = int(left * sample_rate)
+        hi = int(right * sample_rate)
+        vocal_energy = signal_rms(vocals[lo:hi])
+        backing_energy = signal_rms(backing[lo:hi])
+        has_notes = any(left <= (event[0]+event[1])*0.5 < right
+                        for event in vocal_events)
+        use_vocals = has_notes and vocal_energy >= max(
+            VOCAL_PRESENCE_FLOOR, 0.38 * backing_energy)
+        if use_vocals:
+            vocal_sections += 1
+        selected = vocal_events if use_vocals else backing_events
+        merged.extend(event for event in selected
+                      if left <= (event[0]+event[1])*0.5 < right)
+    merged.sort(key=lambda event: event[0])
+    return (merged or backing_events, backing_events,
+            f"auto by section ({vocal_sections}/{segments} vocal sections)")
+
+
 def transcribe_events(signal, sample_rate, picked):
     """Transcribe a stem to notes, raising if nothing comes back."""
     events = transcribe_notes(signal, sample_rate)
@@ -2007,8 +2071,17 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
     info = [f"melody source: {picked}", f"method: {method}"]
 
     if method == METHOD_TRANSCRIBE and voices in (VOICES_BAND, VOICES_NES):
-        events = transcribe_events(signal, sample_rate, picked)
-        events = clean_events(events)
+        if source == SOURCE_AUTO:
+            events, harmony_events, selected = transcribe_auto_stems(
+                stems, sample_rate)
+            info[0] = f"melody source: {selected}"
+        else:
+            events = clean_events(transcribe_events(signal, sample_rate, picked))
+            harmony_events = events
+            if source == SOURCE_VOCALS and stems.get("other") is not None:
+                backing = clean_events(transcribe_notes(stems["other"], sample_rate))
+                if backing:
+                    harmony_events = backing
         # The key is detected whether or not it is used to snap the notes: the
         # arranger needs its tonic, so --key-snap must not be able to switch
         # --arrange off as a side effect.
@@ -2034,14 +2107,19 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
             span = max(end for start, end, pitch, amplitude in events)
             grid, beats = build_grid(beat_times, tempo, span, subdivisions=4)
             if arrange:
-                chords, bass_notes = plan_arrangement(
-                    events, beats, key_tonic, key_degrees, tight=nes,
+                chords, fallback_bass = plan_arrangement(
+                    harmony_events, beats, key_tonic, key_degrees, tight=nes,
                 )
+                # Prefer the original bass riff. Repeating chord roots is only
+                # appropriate when no bass pitches can be tracked.
+                bass_notes = bass_from_stem(stems.get("bass"), sample_rate)
+                if not bass_notes:
+                    bass_notes = fallback_bass
             if nes:
                 if lead_notes:
                     lead_notes = quantize_notes(lead_notes, tempo, beat_times)
-                if arrange:
-                    drum_hits = drum_pattern(drum_hits, beats)
+                # Preserve real fills and transitions instead of repeating
+                # an averaged one-bar loop for the whole track.
                 drum_hits = snap_drums(drum_hits, grid)
                 drum_hits = accent_drums(drum_hits, beats)
         except Exception:
@@ -2049,13 +2127,15 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
             bass_notes = []
         if not bass_notes:
             bass_notes = bass_from_stem(stems.get("bass"), sample_rate)
-            if key_snap and key_scale:
-                bass_notes = snap_notes_to_key(bass_notes, key_scale)
-
+        if key_snap and key_scale and bass_notes:
+            bass_notes = snap_notes_to_key(bass_notes, key_scale)
+        pulse_step = 60.0 / tempo / 4 if "tempo" in locals() and tempo > 0 else 0.125
+        duration = max(len(stem) for stem in stems.values()) / sample_rate
         voice = render_band(events, rate, duty, transpose,
                             lead_notes=lead_notes, bass_notes=bass_notes,
                             drum_hits=drum_hits, arp=nes, vibrato=nes,
-                            chords=chords, echo_delay=echo_delay)
+                            chords=chords, echo_delay=echo_delay,
+                            pulse_step=pulse_step, duration=duration)
         voice = normalize_loudness(voice)
         if dither:
             voice = tpdf_dither(voice, bits)
@@ -2063,6 +2143,10 @@ def convert(input_path, output_path=None, format=None, bits=DEFAULT_BITS,
         write_output(destination, samples_u8, rate, 1)
         quality_ok, report = validate_audio(samples_u8, rate, len(events))
         info.append(f"voices: {voices}")
+        transcribed_end = max(event[1] for event in events)
+        info.append(f"source length: {duration:.1f}s, transcription: {transcribed_end:.1f}s")
+        if duration - transcribed_end > 8:
+            info.append("warning: note transcription ends before original audio")
         if key_line:
             info.append(key_line)
         detail = f"bass: {len(bass_notes)} notes, drums: {len(drum_hits)} hits"
