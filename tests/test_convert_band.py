@@ -167,6 +167,15 @@ class TestBandArrangement:
         # the last note has ended (the events stop at 7.95 s).
         assert changed.max() > int(8.0 * c.DEFAULT_RATE)
 
+    @pytest.mark.parametrize("chip", ["ay", "ym"])
+    def test_psg_modes_complete_an_end_to_end_conversion(self, band_run, chip):
+        ok, report, written = band_run(voices=chip)
+        assert ok, report
+        assert line(report, "voices:") == f"voices: {chip}"
+        assert line(report, "channels:") == "channels: 3 tone, shared noise (approximate PSG sound)"
+        assert written["samples"].size >= SECONDS * c.DEFAULT_RATE
+        assert np.std(written["samples"].astype(np.float64)) > 1.0
+
     def test_nes_adds_the_arpeggio_and_beat_quantising(self, band_run):
         quality_ok, report, written = band_run(voices="nes")
         assert "arpeggio, beat-quantised" in line(report, "bass:")

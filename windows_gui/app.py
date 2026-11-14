@@ -218,7 +218,10 @@ class GUI(tk.Tk):
                            ("echo", "Эхо"), ("dither", "Дизеринг"), ("cache", "Кеширование")):
             var = tk.BooleanVar(value=bool(self.saved.get(key, True)))
             self.fields[key] = var
-            ttk.Checkbutton(toggles, text=label, variable=var).pack(side="left", padx=(0, 13))
+            check = ttk.Checkbutton(toggles, text=label, variable=var)
+            check.pack(side="left", padx=(0, 13))
+            if key == "echo":
+                self.echo_check = check
         tools = ttk.Frame(frame)
         tools.pack(fill="x", pady=(0, 10))
         self.status = tk.StringVar()
@@ -254,7 +257,16 @@ class GUI(tk.Tk):
         scrollbar.pack(side="right", fill="y")
         self.log.config(yscrollcommand=scrollbar.set)
         self._write("Готово. Для конвертации нужны Python 3.11 x64, FFmpeg и движок audio8bit.")
+        self.fields["voices"][0].trace_add("write", lambda *_: self._update_chip_controls())
+        self._update_chip_controls()
         self._refresh_status()
+
+    def _update_chip_controls(self):
+        voice_var, choices = self.fields["voices"]
+        chip = choices[voice_var.get()] in ("ay", "ym")
+        self.echo_check.configure(state="disabled" if chip else "normal")
+        # No hardware pulse-width modulation on AY/YM: always 50% duty.
+        self.duty_widget.configure(state="disabled" if chip else "readonly")
 
     def _path_input(self, frame, title, key, chooser):
         ttk.Label(frame, text=title).pack(anchor="w")
@@ -275,6 +287,8 @@ class GUI(tk.Tk):
         var = tk.StringVar(value=label)
         self.fields[key] = (var, mapping)
         widget = ttk.Combobox(frame, textvariable=var, values=list(mapping), state="readonly", width=12)
+        if key == "duty":
+            self.duty_widget = widget
         if fill:
             widget.pack(fill="x", pady=(3, 10))
         else:

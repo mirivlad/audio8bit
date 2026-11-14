@@ -30,6 +30,23 @@ pip install git+https://github.com/yumiaura/audio8bit.git
 > **First run is slow:** it downloads a small AI model (about 80 MB) and can take
 > a few minutes. That is normal; later runs are faster.
 
+### ZX Spectrum / Yamaha PSG (fork v0.0.5)
+
+This fork adds two experimental 3-channel retro sound modes:
+
+```bash
+audio8bit -i song.mp3 -V ay  # ZX Spectrum 128K (AY-3-8910/8912)
+audio8bit -i song.mp3 -V ym  # Yamaha YM2149F (Atari ST)
+```
+
+They simulate the chip's 50%-duty three-tone limitation, approximate
+logarithmic amplitude envelopes, quantized tone periods, and time-share
+the third tone/noise channel for drums. This is **not** a cycle-accurate
+emulator or a tracker-file exporter (.AY/.YM); output is WAV/MP3/etc.
+Because real AY/YM chips have fixed 50%-duty pulses, `--duty` has no
+effect in these modes. `--echo` does not apply to these hardware-inspired
+modes. Use `--method transcribe` (the default).
+
 ### Usage
 
 ```bash
