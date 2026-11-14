@@ -59,6 +59,10 @@ def band_run(monkeypatch, tmp_path):
                         lambda *a, **k: (stems, STEM_RATE))
     monkeypatch.setattr(c, "transcribe_events",
                         lambda signal, rate, picked: list(events))
+    # The adaptive arranger transcribes both the vocal and instrumental stem
+    # directly. Keep this synthetic fixture independent of Basic Pitch.
+    monkeypatch.setattr(c, "transcribe_notes",
+                        lambda signal, rate: list(events))
     monkeypatch.setattr(c, "detect_drums",
                         lambda signal, rate: [(0.5, "kick", 1.0),
                                               (1.0, "snare", 0.8)])
