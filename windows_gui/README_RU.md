@@ -22,7 +22,7 @@
 ## Сборка
 
 GitHub Actions → **Windows GUI** → Run workflow. Результат — artifact ZIP.
-При изменениях в `main` workflow также создаёт GUI-релиз `gui-v0.1.0`.
+При изменениях в `main` workflow также создаёт GUI-релиз `gui-v0.1.1`.
 
 Локальная сборка (Python 3.11 x64):
 
@@ -37,3 +37,12 @@ python -m PyInstaller --onefile --noconsole --name Audio8BitGUI --clean windows_
 Исходный audio8bit под **PolyForm Noncommercial 1.0.0**, а не OSI open-source.
 Коммерческое использование движка требует отдельной лицензии автора. Лицензия
 в корне репозитория относится к исходному движку.
+
+## Если Basic Pitch не загружается
+
+Откройте **«Проверить библиотеки»**: журнал покажет полный traceback и версии
+Python-пакетов. **«Восстановить зависимости»** установит совместимую версию
+setuptools (с `pkg_resources`), обновит `pretty_midi` и проверит импорт
+Basic Pitch. Уже скачанные модели Hugging Face и исходные аудиофайлы не
+удаляются. Предупреждения HF_TOKEN / symlinks / CoreML / ONNX не являются
+сами по себе ошибками конвертации.

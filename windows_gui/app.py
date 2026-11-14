@@ -103,6 +103,7 @@ class GUI(tk.Tk):
         self.process = None
         self.busy = False
         self.result = None
+        self.basic_pitch_ok = False
         self.saved = self._load()
         self.fields = {}
         self._layout()
@@ -180,6 +181,12 @@ class GUI(tk.Tk):
         ttk.Button(tools, text="Указать FFmpeg", command=self._choose_ffmpeg).pack(side="right")
         self.install_btn = ttk.Button(tools, text="Установить движок", command=self._install)
         self.install_btn.pack(side="right", padx=7)
+        diagnostics = ttk.Frame(frame)
+        diagnostics.pack(fill="x", pady=(0, 10))
+        self.diagnose_btn = ttk.Button(diagnostics, text="Проверить библиотеки", command=self._diagnose)
+        self.diagnose_btn.pack(side="left")
+        self.repair_btn = ttk.Button(diagnostics, text="Восстановить зависимости", command=self._repair)
+        self.repair_btn.pack(side="left", padx=(8, 0))
         actions = ttk.Frame(frame)
         actions.pack(fill="x", pady=(0, 10))
         self.run_btn = ttk.Button(actions, text="Преобразовать в 8-bit", command=self._convert)
@@ -295,6 +302,8 @@ class GUI(tk.Tk):
         self.stopping = False
         self.run_btn.configure(state="disabled")
         self.install_btn.configure(state="disabled")
+        self.diagnose_btn.configure(state="disabled")
+        self.repair_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.progress.start(12)
         def task():
@@ -312,13 +321,67 @@ class GUI(tk.Tk):
         self._write("Установка может загрузить несколько гигабайт зависимостей и модели ИИ.")
         self._start(self._install_worker)
 
-    def _install_worker(self):
-        python = external_python()
-        if not python:
-            self.events.put(("log", "Не найден Python 3.11 x64. Установите его через setup-prereqs.ps1."))
+    def _diagnose(self):
+        if not engine_python().is_file():
+            messagebox.showwarning("Движок", "Сначала установите движок.")
             return
+        self._start(self._diagnose_worker)
+
+    def _diagnose_worker(self):
+        # Run imports in the *installed* venv, not in the frozen GUI process.
+        # Tracebacks are deliberately preserved: an ImportError inside a
+        # dependency must not be reported as if basic-pitch were absent.
+        script = (
+            "import sys, traceback, importlib.metadata as md\n"
+            "print('Python:', sys.version, flush=True)\n"
+            "for name in ('audio8bit', 'basic-pitch', 'pretty-midi', 'setuptools', "
+            "'tensorflow', 'numpy', 'librosa'):\n"
+            " try: print(name + ':', md.version(name), flush=True)\n"
+            " except md.PackageNotFoundError: print(name + ': НЕ УСТАНОВЛЕН', flush=True)\n"
+            "try:\n"
+            " from basic_pitch.inference import predict\n"
+            " print('Basic Pitch: импорт успешен', flush=True)\n"
+            "except Exception:\n"
+            " traceback.print_exc()\n"
+            " sys.exit(1)\n"
+        )
+        self.events.put(("log", "Проверка Basic Pitch в окружении программы…"))
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        code = self._launch([str(engine_python()), "-c", script], env=env)
+        self.basic_pitch_ok = code == 0 and not self.stopping
+        if not self.basic_pitch_ok:
+            self.events.put(("log", "Импорт Basic Pitch не прошёл. Выше находится реальная ошибка Python."))
+        return self.basic_pitch_ok
+
+    def _repair(self):
+        if not engine_python().is_file():
+            messagebox.showwarning("Движок", "Сначала установите движок.")
+            return
+        self._start(self._repair_worker)
+
+    def _repair_worker(self):
+        # Some transitive packages still import pkg_resources; recent
+        # setuptools removed it. Keep a compatible version in this venv.
+        self.basic_pitch_ok = False
+        self.events.put(("log", "Проверка и восстановление совместимых зависимостей…"))
+        code = self._launch([str(engine_python()), "-m", "pip", "install",
+                             "--no-input", "--disable-pip-version-check",
+                             "setuptools>=70,<81", "pretty_midi>=0.2.11.post0",
+                             "basic-pitch>=0.4,<0.5"])
+        if code != 0 or self.stopping:
+            self.events.put(("log", f"Восстановление не завершено (код {code})."))
+            return False
+        self._launch([str(engine_python()), "-m", "pip", "check"])
+        return self._diagnose_worker()
+
+    def _install_worker(self):
         exe = engine_python()
         if not exe.is_file():
+            python = external_python()
+            if not python:
+                self.events.put(("log", "Не найден Python 3.11 x64. Установите его через setup-prereqs.ps1."))
+                return
             exe.parent.mkdir(parents=True, exist_ok=True)
             code = self._launch([python, "-m", "venv", str(home() / "engine")])
             if code != 0 or self.stopping:
@@ -326,8 +389,19 @@ class GUI(tk.Tk):
                 return
         code = self._launch([str(exe), "-m", "pip", "install", "--no-input",
                              "--disable-pip-version-check", "audio8bit==" + ENGINE])
-        self.events.put(("log", "Движок установлен." if code == 0 and not self.stopping else
-                         f"Установка прервана или завершилась с кодом {code}."))
+        if code != 0 or self.stopping:
+            self.events.put(("log", f"Установка не завершена (код {code})."))
+            return
+        if self._repair_worker():
+            self.events.put(("log", "Движок установлен, импорт Basic Pitch проверен."))
+
+    def _convert_with_preflight(self, cmd, env, result, method):
+        if method == "transcribe" and not self.basic_pitch_ok:
+            if not self._diagnose_worker():
+                self.events.put(("log", "Обработка остановлена до разделения аудио: "
+                                         "Basic Pitch не загружается. Попробуйте «Восстановить зависимости»."))
+                return
+        self._convert_worker(cmd, env, result)
 
     def _convert(self):
         try:
@@ -359,7 +433,8 @@ class GUI(tk.Tk):
         self._write("Выход: " + str(result))
         env = dict(os.environ)
         env["PATH"] = ff_dir + os.pathsep + env.get("PATH", "")
-        self._start(lambda: self._convert_worker(cmd, env, result))
+        env["PYTHONUNBUFFERED"] = "1"
+        self._start(lambda: self._convert_with_preflight(cmd, env, result, opts["method"]))
 
     def _convert_worker(self, cmd, env, result):
         code = self._launch(cmd, env)
@@ -396,6 +471,8 @@ class GUI(tk.Tk):
                     self.progress.stop()
                     self.run_btn.configure(state="normal")
                     self.install_btn.configure(state="normal")
+                    self.diagnose_btn.configure(state="normal")
+                    self.repair_btn.configure(state="normal")
                     self.stop_btn.configure(state="disabled")
                     self._refresh_status()
         except queue.Empty:

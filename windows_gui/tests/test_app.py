@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from windows_gui.app import convert_args, target_path, engine_python
+from windows_gui.app import convert_args, target_path, engine_python, GUI
 
 
 class GuiTests(unittest.TestCase):
@@ -24,6 +24,11 @@ class GuiTests(unittest.TestCase):
         opts["method"] = "pitch"
         with self.assertRaisesRegex(ValueError, "Транскрипция"):
             convert_args("a.mp3", Path("b.wav"), opts)
+
+    def test_diagnostic_method_available(self):
+        self.assertTrue(callable(GUI._diagnose_worker))
+        self.assertTrue(callable(GUI._repair_worker))
+        self.assertTrue(callable(GUI._convert_with_preflight))
 
     def test_validation(self):
         opts = dict(bits="0", rate="22050", transpose="0", duty="0.25",

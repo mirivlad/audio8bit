@@ -363,9 +363,16 @@ def transcribe_notes(signal, sample_rate):
     try:
         from basic_pitch.inference import predict
     except ImportError as missing:
+        # ImportError may come from *inside* basic-pitch (for example an
+        # incompatible dependency). Do not claim the package is uninstalled.
+        if getattr(missing, "name", None) in ("basic_pitch", "basic_pitch.inference"):
+            raise ConversionError(
+                "basic-pitch is required for note transcription. Install it with "
+                "'pip install basic-pitch', or use --method pitch."
+            ) from missing
         raise ConversionError(
-            "basic-pitch is required for note transcription. Install it with "
-            "'pip install basic-pitch', or use --method pitch."
+            f"basic-pitch cannot load one of its dependencies: {missing}. "
+            "Check the Python environment and its installed packages."
         ) from missing
     try:
         from basic_pitch import ICASSP_2022_MODEL_PATH
