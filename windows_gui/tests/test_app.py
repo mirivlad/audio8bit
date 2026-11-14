@@ -1,9 +1,11 @@
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from windows_gui.app import convert_args, target_path, engine_python, GUI
+from windows_gui.app import convert_args, target_path, engine_python, child_python_env, GUI
 
 
 class GuiTests(unittest.TestCase):
@@ -29,6 +31,21 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(callable(GUI._diagnose_worker))
         self.assertTrue(callable(GUI._repair_worker))
         self.assertTrue(callable(GUI._convert_with_preflight))
+
+    def test_utf8_child_output_even_when_parent_uses_cp1251(self):
+        # Simulates the failure seen on a Russian Windows installation.
+        # A Japanese output filename must not crash Python's print().
+        env = child_python_env({"PATH": "example", "PYTHONIOENCODING": "cp1251"})
+        self.assertEqual(env["PYTHONIOENCODING"], "utf-8:backslashreplace")
+        self.assertEqual(env["PYTHONUTF8"], "1")
+        self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+        self.assertEqual(env["PATH"], "example")
+        actual = subprocess.run(
+            [sys.executable, "-c", "print('Wrote C:/chiptune/博麗神社うた祭_8bit.mp3')"],
+            env=child_python_env({"PYTHONIOENCODING": "cp1251"}),
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertIn("博麗神社うた祭_8bit.mp3", actual.stdout)
 
     def test_validation(self):
         opts = dict(bits="0", rate="22050", transpose="0", duty="0.25",

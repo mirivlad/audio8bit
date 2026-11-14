@@ -22,7 +22,7 @@
 ## Сборка
 
 GitHub Actions → **Windows GUI** → Run workflow. Результат — artifact ZIP.
-При изменениях в `main` workflow также создаёт GUI-релиз `gui-v0.1.1`.
+При изменениях в `main` workflow также создаёт GUI-релиз `gui-v0.1.2`.
 
 Локальная сборка (Python 3.11 x64):
 
@@ -46,3 +46,13 @@ setuptools (с `pkg_resources`), обновит `pretty_midi` и провери�
 Basic Pitch. Уже скачанные модели Hugging Face и исходные аудиофайлы не
 удаляются. Предупреждения HF_TOKEN / symlinks / CoreML / ONNX не являются
 сами по себе ошибками конвертации.
+
+## Windows: ошибка UnicodeEncodeError / cp1251
+
+В версии GUI 0.1.2 все дочерние процессы Python запускаются с
+`PYTHONIOENCODING=utf-8:backslashreplace`, `PYTHONUTF8=1` и
+`PYTHONUNBUFFERED=1`. Это предотвращает падение при выводе путей к
+файлам с японскими, китайскими и другими символами, не кодируемыми в CP1251.
+Движок переустанавливать не нужно. Если в старой версии конвертация
+завершилась с ошибкой только на строке `print(f"Wrote {output}")`,
+результирующий файл мог уже сохраниться на диск — проверьте папку.

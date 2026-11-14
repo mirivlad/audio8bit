@@ -56,11 +56,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view gui-v0.1.1 >/dev/null 2>&1; then
-            gh release upload gui-v0.1.1 Audio8BitGUI-windows-x64.zip --clobber
+          if gh release view gui-v0.1.2 >/dev/null 2>&1; then
+            gh release upload gui-v0.1.2 Audio8BitGUI-windows-x64.zip --clobber
           else
-            gh release create gui-v0.1.1 Audio8BitGUI-windows-x64.zip \
+            gh release create gui-v0.1.2 Audio8BitGUI-windows-x64.zip \
               --target "$GITHUB_SHA" \
-              --title "Audio8Bit GUI v0.1.1 (Windows)" \
-              --notes "Windows x64 GUI for audio8bit. Adds full Basic Pitch import diagnostics and compatible-dependency repair. The EXE contains the GUI only; install Python 3.11 x64, FFmpeg, and the audio8bit engine separately using the included instructions. Engine license: PolyForm Noncommercial 1.0.0."
+              --title "Audio8Bit GUI v0.1.2 (Windows)" \
+              --notes "Windows x64 GUI for audio8bit. Fixes Windows CP1251 output errors for non-Latin filenames; retains Basic Pitch diagnostics and dependency repair. The EXE contains the GUI only; install Python 3.11 x64, FFmpeg, and the audio8bit engine separately using the included instructions. Engine license: PolyForm Noncommercial 1.0.0."
           fi

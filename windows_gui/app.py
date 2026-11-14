@@ -43,6 +43,20 @@ def external_python() -> str | None:
     return None
 
 
+def child_python_env(base: dict | None = None) -> dict:
+    """Always use UTF-8 for child Python processes on any Windows code page.
+
+    The GUI reads subprocess output as UTF-8. Without PYTHONIOENCODING,
+    a Russian Windows locale may choose cp1251 for the child's stdout and
+    crash on Japanese or other non-cp1251 characters in file names.
+    """
+    env = dict(os.environ if base is None else base)
+    env["PYTHONIOENCODING"] = "utf-8:backslashreplace"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
 def ffmpeg_path(selected: str = "") -> str | None:
     places = []
     if selected:
@@ -283,7 +297,7 @@ class GUI(tk.Tk):
             self.events.put(("log", "Запуск: " + args[0] + " …"))
             p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                                 errors="replace", bufsize=1, env=env,
+                                 errors="replace", bufsize=1, env=child_python_env(env),
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             self.process = p
             for line in p.stdout:
